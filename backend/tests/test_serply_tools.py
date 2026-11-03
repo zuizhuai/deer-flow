@@ -383,3 +383,31 @@ def test_coerce_max_results_inf_falls_back_to_default():
     import deerflow.community.serply.tools as serply_mod
 
     assert serply_mod._coerce_max_results(float("inf")) == serply_mod._DEFAULT_MAX_RESULTS
+
+
+def test_coerce_max_results_boolean_falls_back_to_default() -> None:
+    """``bool`` is an ``int`` subclass, so ``max_results: true`` used to become 1."""
+    import deerflow.community.serply.tools as serply_mod
+
+    assert serply_mod._coerce_max_results(True) == serply_mod._DEFAULT_MAX_RESULTS
+
+
+def test_coerce_max_results_fractional_float_falls_back_to_default() -> None:
+    """``3.5`` used to be truncated to 3 instead of being reported."""
+    import deerflow.community.serply.tools as serply_mod
+
+    assert serply_mod._coerce_max_results(3.5) == serply_mod._DEFAULT_MAX_RESULTS
+
+
+def test_coerce_max_results_integral_float_is_kept() -> None:
+    """``4.0`` is an explicit count and stays valid."""
+    import deerflow.community.serply.tools as serply_mod
+
+    assert serply_mod._coerce_max_results(4.0) == 4
+
+
+def test_coerce_max_results_cap_still_applies() -> None:
+    """The shared helper applies no upper bound; Serply's 1..100 cap still does."""
+    import deerflow.community.serply.tools as serply_mod
+
+    assert serply_mod._coerce_max_results(500) == serply_mod._SERPLY_MAX_RESULTS

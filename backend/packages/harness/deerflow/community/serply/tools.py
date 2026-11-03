@@ -17,6 +17,7 @@ import re
 import httpx
 from langchain.tools import tool
 
+from deerflow.community.search_max_results import coerce_max_results
 from deerflow.community.url_safety import safe_public_result_url
 from deerflow.config import get_app_config
 
@@ -57,14 +58,14 @@ def _coerce_max_results(
     default: int = _DEFAULT_MAX_RESULTS,
     max_allowed: int = _SERPLY_MAX_RESULTS,
 ) -> int:
-    try:
-        coerced = int(value)
-    except (TypeError, ValueError, OverflowError):
-        logger.warning("Invalid Serply max_results=%r; using default %s", value, default)
-        coerced = default
-    if coerced < 1:
-        logger.warning("Invalid Serply max_results=%r; using default %s", value, default)
-        coerced = default
+    """Normalize ``max_results`` through the shared owner, then apply Serply's cap.
+
+    The previous local copy used a bare ``int(value)``, so ``max_results: true``
+    silently became 1 (``bool`` is an ``int`` subclass) and ``3.5`` was truncated
+    to 3, while the providers already on the shared helper warn and fall back to
+    the default for both. Serply accepts ``num`` in 1..100, hence the clamp.
+    """
+    coerced = coerce_max_results(value, provider="Serply", logger=logger, default=default)
     return min(coerced, max_allowed)
 
 
