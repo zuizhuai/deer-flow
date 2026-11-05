@@ -1011,10 +1011,12 @@ class LocalContainerBackend(SandboxBackend):
                 return exc.info
             except OSError:
                 # ``subprocess.run`` raises OSError (FileNotFoundError, ENOMEM, ...) when the
-                # runtime CLI could not be spawned at all, so no container can own this port.
-                # Hand the reservation back and re-raise the original error instead of
-                # leaking one reservation per attempt.
-                release_port(port)
+                # runtime CLI could not be spawned at all. In open mode nothing else can own
+                # the published port, so hand the reservation back and re-raise the original
+                # error instead of leaking one reservation per attempt. Restricted mode may
+                # already have a network proxy on this port, so it keeps the reservation.
+                if self._network_mode == "open":
+                    release_port(port)
                 raise
             except RuntimeError as exc:
                 release_port(port)
