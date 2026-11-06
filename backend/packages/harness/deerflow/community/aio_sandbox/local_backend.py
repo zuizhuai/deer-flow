@@ -595,6 +595,25 @@ def _is_no_such_network_error(stderr: str, network_name: str) -> bool:
     return (match["named"] or match["embedded"]) == network_name
 
 
+def _cli_spawn_failure(exc: BaseException) -> bool:
+    """Return whether *exc* came from the container runtime failing to execute.
+
+    ``subprocess.run`` raises ``FileNotFoundError`` when the runtime binary is
+    missing and ``PermissionError`` when it cannot be executed. Helpers that
+    wrap those errors keep the original on the cause chain (``_inspect_network``
+    uses ``raise ... from exc``), so the chain decides, not the outer type.
+
+    A spawn failure proves the runtime never ran: the command did not execute,
+    so it created nothing.
+    """
+    seen: BaseException | None = exc
+    while seen is not None:
+        if isinstance(seen, (FileNotFoundError, PermissionError)):
+            return True
+        seen = seen.__cause__
+    return False
+
+
 class LocalContainerBackend(SandboxBackend):
     """Backend that manages sandbox containers locally using Docker or Apple Container.
 
@@ -1067,10 +1086,14 @@ class LocalContainerBackend(SandboxBackend):
                 raise _ExistingRestrictedSandbox(existing)
             raise RuntimeError(f"Restricted sandbox {sandbox_id} already exists but is not ready for adoption")
 
+        # Only the proxy publishes the reserved port. Until it has been started,
+        # no restricted resource can be holding it.
+        proxy_started = False
         try:
             self._create_internal_network(network_name, sandbox_id)
             self._create_egress_network(egress_network_name, sandbox_id)
             self._start_network_proxy(proxy_name, network_name, egress_network_name, container_name, port, sandbox_id, relay_token)
+            proxy_started = True
             proxy_url = f"http://{proxy_name}:3128"
             return self._start_container(
                 container_name,
@@ -1106,6 +1129,14 @@ class LocalContainerBackend(SandboxBackend):
                 # not completed yet.
                 if self._restricted_resources_status(sandbox_id) != "missing":
                     raise
+            if not proxy_started and _cli_spawn_failure(exc):
+                # The container runtime never executed, so this sandbox owns no
+                # restricted resource. The cleanup below would shell out to the
+                # same runtime, raise the same spawn error and replace this one,
+                # which bypasses ``create``'s RuntimeError release and leaks the
+                # reservation for every retry. Release here and re-raise.
+                release_port(port)
+                raise
             self._cleanup_restricted_resources(sandbox_id)
             raise
 

@@ -24,6 +24,14 @@ This section accumulates work toward the **2.3.0** milestone
 
 ### Fixed
 
+- **sandbox:** Restricted-mode local sandbox creation now returns its port
+  reservation when the container runtime cannot be spawned at all, instead of
+  leaking one port per retry. The cleanup in that handler shells out to the same
+  runtime, so its identical spawn error replaced the wrapped `RuntimeError` and
+  skipped the caller's release; a runtime that never executed created nothing,
+  so the reservation was pure leakage. Open mode already released it in #7887,
+  which deliberately left the restricted path alone. ([#7883])
+
 - **sandbox:** Fresh lazy AIO runs with an explicit authorized skill view no
   longer create or acquire a sandbox before the first sandbox-backed tool
   call. Existing sandbox bindings and providers that require skill uploads
@@ -16033,3 +16041,4 @@ with **180 merged pull requests** since the first 2.0 milestone tag.
 [#7831]: https://github.com/bytedance/deer-flow/pull/7831
 [#7782]: https://github.com/bytedance/deer-flow/pull/7782
 [#7892]: https://github.com/bytedance/deer-flow/pull/7892
+[#7883]: https://github.com/bytedance/deer-flow/issues/7883

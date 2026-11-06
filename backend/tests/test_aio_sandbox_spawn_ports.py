@@ -233,3 +233,33 @@ def test_restricted_spawn_failure_keeps_port_when_proxy_cleanup_is_uncertain(mon
 
     assert events == ["proxy started", "sandbox spawn failed", "cleanup unconfirmed"]
     assert_port_reserved(allocator)
+
+
+@pytest.mark.parametrize("error_type", [FileNotFoundError, PermissionError])
+def test_restricted_cli_absent_before_proxy_releases_port(monkeypatch, error_type):
+    """A runtime that cannot execute must not consume a restricted-mode port.
+
+    ``_start_restricted_sandbox`` re-raises after attempting cleanup, and
+    ``create`` releases the reservation only for ``RuntimeError``. When the
+    runtime binary is missing or not executable, that cleanup shells out to the
+    same runtime, raises the same spawn error and *replaces* the wrapped
+    ``RuntimeError`` -- so the release is skipped and every retry burns the next
+    port in the allocator's range. The port must come back because a runtime
+    that never executed created nothing.
+    """
+    backend, allocator = make_backend(monkeypatch, restricted=True)
+    monkeypatch.setattr(backend, "_restricted_resources_status", lambda sandbox_id: "missing")
+    error = error_type("container executable could not start")
+
+    def fail_spawn(cmd, **kwargs):
+        raise error
+
+    monkeypatch.setattr(local_backend.subprocess, "run", fail_spawn)
+    for attempt in range(3):
+        with pytest.raises(RuntimeError) as raised:
+            backend.create("thread", f"sandbox-{attempt}")
+        # The wrapping helper reports a spawn failure; cleanup must not replace it.
+        assert isinstance(raised.value.__cause__, error_type)
+
+    # Recovery can reuse the original port instead of consuming the range.
+    assert allocator.allocate(BASE_PORT, max_range=1) == BASE_PORT

@@ -37,7 +37,11 @@ Container CLI raises `FileNotFoundError` or `PermissionError` during spawn.
 Catch these only around the CLI call, preserving the original exception;
 post-start errors cannot prove absence. Restricted creation must not opt in:
 its proxy may already own the port, even if the final sandbox CLI cannot start.
-Regressions: `tests/test_aio_sandbox_spawn_ports.py`.
+Restricted creation releases the reservation only when the runtime never
+executed at all and the proxy was never started: a spawn failure proves the
+command did not run, and the cleanup shell-out in the same handler would raise
+the same error and replace the wrapped `RuntimeError`, skipping the caller's
+release. Regressions: `tests/test_aio_sandbox_spawn_ports.py`.
 
 An implicit-shell fence is sticky for the container's lifetime, even after a
 successful explicit recovery session. `requires_container_recycle` includes
