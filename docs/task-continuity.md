@@ -44,7 +44,9 @@ The standard lead-agent builders (including custom-agent bootstrap) and
   The optional `role="user"`, `"assistant"`, or `"tool"` filters by message author
   type; omission or `null` preserves search across all roles. These values map to
   internal `human`, `ai`, and `tool` roles; returned role values stay unchanged.
-  Both active and archived history are filtered before the eight-result limit.
+  Both active and archived history are filtered before the eight-result limit,
+  which counts distinct sources rather than rows: a source archived into several
+  reachable batches is returned once and spends one slot.
   For example, `history_search(query="replicas", role="user")` narrows the search
   to user messages about replica counts; use `history_read` to verify the source.
   Filtering does not change ranking or guarantee retrieval of the latest message.

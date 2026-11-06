@@ -24,6 +24,14 @@ This section accumulates work toward the **2.3.0** milestone
 
 ### Fixed
 
+- **agents:** `history_search` spends its eight-result budget on distinct
+  archived sources instead of archived rows. A source is stored once per
+  reachable batch, so repeated copies of one match could fill the budget and
+  hide another source the same query matched; the ranked rows are now counted
+  per source ID and read lazily only until the budget is spent. Ranking,
+  role filtering, active-message precedence and excerpt canonicalization are
+  unchanged. ([#7943])
+
 - **sandbox:** Fresh lazy AIO runs with an explicit authorized skill view no
   longer create or acquire a sandbox before the first sandbox-backed tool
   call. Existing sandbox bindings and providers that require skill uploads
@@ -16033,3 +16041,4 @@ with **180 merged pull requests** since the first 2.0 milestone tag.
 [#7831]: https://github.com/bytedance/deer-flow/pull/7831
 [#7782]: https://github.com/bytedance/deer-flow/pull/7782
 [#7892]: https://github.com/bytedance/deer-flow/pull/7892
+[#7943]: https://github.com/bytedance/deer-flow/issues/7943

@@ -27,6 +27,11 @@ from deerflow.utils.messages import message_content_to_text
 
 logger = logging.getLogger(__name__)
 
+# Merged result budget for history_search. Archived rows are counted per distinct
+# source ID: one source is stored once per reachable batch, so counting rows would
+# let its copies spend the whole budget before another source is reached.
+_RESULT_BUDGET = 8
+
 
 def digest(value) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
@@ -215,11 +220,19 @@ def lookup(state: dict, runtime, *, query: str | None = None, source_id: str | N
                 else:
                     match = " OR ".join('"' + term.replace('"', '""') + '"' for term in keywords)
                     role_filter = " AND json_extract(payload, '$.role') = ?" if role is not None else ""
-                    parameters = [match, *batches, *([role] if role is not None else []), 8]
-                    rows = db.execute(f"SELECT payload FROM sources WHERE sources MATCH ? AND batch IN ({placeholders}){role_filter} ORDER BY rank LIMIT ?", parameters)
+                    parameters = [match, *batches, *([role] if role is not None else [])]
+                    # Ranked rows are consumed lazily and the budget counts distinct
+                    # source IDs, so duplicate archives of one source cannot starve
+                    # another matching source. Scanning stops as soon as the budget
+                    # is spent.
+                    rows = db.execute(f"SELECT payload FROM sources WHERE sources MATCH ? AND batch IN ({placeholders}){role_filter} ORDER BY rank", parameters)
                 for (payload,) in rows:
                     row = json.loads(payload)
+                    if row["id"] in found:
+                        continue
                     found[row["id"]] = row
+                    if source_id is None and len(found) >= _RESULT_BUDGET:
+                        break
                 if excerpts and query is not None and found:
                     # A source may be archived at different lengths; select its first stored version, as history_read does.
                     ids = list(found)
@@ -242,7 +255,7 @@ def lookup(state: dict, runtime, *, query: str | None = None, source_id: str | N
         if row["id"] not in archived_ids:
             active_only_by_id.setdefault(row["id"], row)
     active_only = list(active_only_by_id.values())
-    results = archived_matches[: max(0, 8 - len(active_only))] + active_only[:8]
+    results = archived_matches[: max(0, _RESULT_BUDGET - len(active_only))] + active_only[:_RESULT_BUDGET]
     if excerpts and query is not None:
         excerpts_result = []
         for row in results:

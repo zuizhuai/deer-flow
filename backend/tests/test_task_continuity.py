@@ -146,6 +146,29 @@ def test_active_only_matches_deduplicate_before_result_limit(scoped):
     assert {row["message_id"] for row in result["results"]} == {None, "archived"}
 
 
+def test_duplicate_archives_count_distinct_sources_against_the_result_budget(scoped):
+    """One source stored in many reachable batches must not hide another match.
+
+    Archived rows are per batch, so a row budget let nine archived copies of the
+    shortest matching source answer history_search with that source alone.
+    """
+    config = TaskContinuityConfig(enabled=True)
+    shared = HumanMessage(content="Citrine ZX-731", id="shared")
+    long_match = HumanMessage(content="Citrine ZX-404 with several unrelated words attached around the note", id="long-match")
+    state = {}
+    for index in range(9):
+        filler = HumanMessage(content=f"unrelated filler {index}", id=f"filler-{index}")
+        state = {"task_history": archive.capture(state, scoped, [shared, filler], config)}
+    state = {"task_history": archive.capture(state, scoped, [long_match], config)}
+
+    result = archive.lookup(state, scoped, query="Citrine")
+
+    expected = {archive.records([shared])[0]["id"], archive.records([long_match])[0]["id"]}
+    returned = [row["id"] for row in result["results"]]
+    assert set(returned) == expected
+    assert len(returned) == len(set(returned))
+
+
 def test_retention_is_explicit_and_duplicate_capture_is_idempotent(scoped):
     config = TaskContinuityConfig(enabled=True, max_batches=1)
     old = {"task_history": archive.capture({}, scoped, conversation(), config)}

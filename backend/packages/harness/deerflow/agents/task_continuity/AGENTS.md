@@ -17,9 +17,13 @@ unused slots are recalculated in the next batch.
 
 `history_search` accepts optional `role=user|assistant|tool`, mapped at the tool
 boundary to stored roles `human|ai|tool`; omission/null keeps all roles. Filter
-archived JSON payloads before SQLite FTS `LIMIT 8`, and active messages before
-the merged result limit. Preserve ranking, source IDs, returned roles, checkpoint
-reachability, and user/thread isolation. Do not add a role parameter to `history_read`.
+archived JSON payloads in SQLite FTS, and active messages before the merged
+result limit. That limit counts distinct source IDs, not rows: one source is
+stored once per reachable batch, so rank the rows, deduplicate by ID and stop
+consuming the cursor once the budget is spent. A row budget (`LIMIT 8`) lets a
+single source's duplicate archives hide every other match. Preserve ranking,
+source IDs, returned roles, checkpoint reachability, and user/thread isolation.
+Do not add a role parameter to `history_read`.
 Sync and async entry points share the implementation; async uses `run_file_io`.
 Regression coverage lives in `backend/tests/test_task_continuity.py`.
 For usage and trust boundaries, read `docs/task-continuity.md` at the repository root.
