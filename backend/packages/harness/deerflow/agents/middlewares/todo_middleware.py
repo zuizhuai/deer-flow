@@ -12,9 +12,11 @@ for the next model request and jumps back to the model node to force continued
 engagement. The completion reminder is injected via ``wrap_model_call`` instead
 of being persisted into graph state as a normal user-visible message.
 
-The completion guard defers to ``model_length_termination``: when a length-capped
-turn has already been terminalized by ``ModelLengthFinishReasonMiddleware``,
-re-engaging would only re-emit the same oversized tool call into the same cap.
+The completion guard defers to turns a safety guard already terminalized:
+``model_length_termination`` for ``ModelLengthFinishReasonMiddleware`` (re-engaging
+would only re-emit the same oversized tool call into the same cap) and
+``loop_detection_termination`` for ``LoopDetectionMiddleware`` (re-engaging would
+only re-enter the loop the detector just broke).
 """
 
 from __future__ import annotations
@@ -28,9 +30,22 @@ from langchain.agents.middleware.types import ModelCallResult, ModelRequest, Mod
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.runtime import Runtime
 
+from deerflow.agents.middlewares.loop_detection_middleware import LOOP_DETECTION_TERMINATION_KEY
 from deerflow.agents.thread_state import ThreadState
 
 TODO_REMINDER_MESSAGE_NAME = "todo_reminder"
+
+# Markers a safety guard stamps on the AIMessage it replaced. A turn carrying
+# one is already terminal — the guard stripped its tool calls and produced a
+# forced final answer — so re-engaging it would only push the model back into
+# the behaviour that guard stopped.
+_TERMINAL_TURN_MARKERS = ("model_length_termination", LOOP_DETECTION_TERMINATION_KEY)
+
+
+def _is_terminal_turn(message: AIMessage) -> bool:
+    """Return True when a safety guard already terminalized *message*."""
+    additional_kwargs = getattr(message, "additional_kwargs", None) or {}
+    return any(additional_kwargs.get(marker) for marker in _TERMINAL_TURN_MARKERS)
 
 
 def _todos_in_messages(messages: list[Any]) -> bool:
@@ -363,11 +378,12 @@ class TodoMiddleware(TodoListMiddleware):
         if (last_ai.additional_kwargs or {}).get("deerflow_error_fallback"):
             return None
 
-        # A length-capped turn was already terminalized by
-        # ModelLengthFinishReasonMiddleware (tool calls suppressed, notice
-        # appended); re-engaging would only re-emit the same oversized tool
-        # call into the same cap.
-        if (last_ai.additional_kwargs or {}).get("model_length_termination"):
+        # A capped turn was already terminalized by a safety guard — a
+        # length-capped turn re-emits the same oversized call into the same cap,
+        # and a loop-capped turn re-enters the tool the detector just stopped.
+        # Both strip the tool calls and leave a forced final answer, so
+        # re-engaging can only repeat the work the guard ended.
+        if _is_terminal_turn(last_ai):
             return None
 
         # 3. Allow exit when all todos are completed or there are no todos.

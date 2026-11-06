@@ -272,6 +272,12 @@ _TOOL_FREQ_WARNING_MSG = "[LOOP DETECTED] You have called {tool_name} {count} ti
 
 _HARD_STOP_MSG = "[FORCED STOP] Repeated tool calls exceeded the safety limit. Producing final answer with results collected so far."
 
+# Marker stamped on the AIMessage a hard stop replaces. A turn that carries it
+# is already terminal, so downstream guards must stand down instead of re-engaging
+# it; ``TodoMiddleware`` reads it for exactly that reason. Mirrors the
+# ``model_length_termination`` marker ``ModelLengthFinishReasonMiddleware`` stamps.
+LOOP_DETECTION_TERMINATION_KEY = "loop_detection_termination"
+
 _TOOL_FREQ_HARD_STOP_MSG = "[FORCED STOP] Tool {tool_name} called {count} times — exceeded the per-tool safety limit. Producing final answer with results collected so far."
 
 
@@ -852,6 +858,19 @@ class LoopDetectionMiddleware(AgentMiddleware[AgentState]):
             last_msg = messages[-1]
             content = self._append_text(last_msg.content, warning or _HARD_STOP_MSG)
             stripped_msg = clone_ai_message_with_tool_calls(last_msg, [], content=content)
+            # Stamp the terminal marker so downstream guards treat this turn as
+            # finished. Without it, ``TodoMiddleware`` sees a tool-call-free
+            # AIMessage with unfinished todos, queues a completion reminder and
+            # jumps back to the model node — re-arming the loop this middleware
+            # just broke (#7953).
+            stripped_kwargs = dict(stripped_msg.additional_kwargs or {})
+            stripped_kwargs[LOOP_DETECTION_TERMINATION_KEY] = {
+                "detection_layer": decision.detection_layer,
+                "count": decision.count,
+                "threshold": decision.threshold,
+                "tool_names": list(decision.tool_names),
+            }
+            stripped_msg = stripped_msg.model_copy(update={"additional_kwargs": stripped_kwargs})
             return {"messages": [stripped_msg]}
 
         if decision.action == "warn":

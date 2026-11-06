@@ -19,6 +19,7 @@ from deerflow.agents.middlewares import loop_detection_middleware as loop_detect
 from deerflow.agents.middlewares.loop_detection_middleware import (
     _HARD_STOP_MSG,
     _MAX_PENDING_WARNINGS_PER_RUN,
+    LOOP_DETECTION_TERMINATION_KEY,
     LoopDetectionMiddleware,
     _hash_tool_calls,
 )
@@ -684,6 +685,29 @@ class TestLoopDetection:
         assert isinstance(msgs[0], AIMessage)
         assert msgs[0].tool_calls == []
         assert _HARD_STOP_MSG in msgs[0].content
+
+    def test_hard_stop_stamps_terminal_marker(self):
+        """#7953: the replaced AIMessage carries the terminal marker so
+        downstream guards (TodoMiddleware) stand down instead of re-engaging."""
+        mw = LoopDetectionMiddleware(warn_threshold=2, hard_limit=4)
+        runtime = _make_runtime()
+        call = [_bash_call("ls")]
+
+        for _ in range(3):
+            mw._apply(_make_state(tool_calls=call), runtime)
+
+        state = _make_state(tool_calls=call)
+        result = mw._apply(state, runtime)
+        assert result is not None
+        stopped = result["messages"][0]
+        assert stopped.additional_kwargs[LOOP_DETECTION_TERMINATION_KEY] == {
+            "detection_layer": "identical_call_set",
+            "count": 4,
+            "threshold": 4,
+            "tool_names": ["bash"],
+        }
+        # The incoming message belongs to the caller and is never mutated.
+        assert LOOP_DETECTION_TERMINATION_KEY not in state["messages"][-1].additional_kwargs
 
     def test_hard_stop_stamps_loop_capped_stop_reason(self):
         """#3875 Phase 2 (ggnnggez review): the loop hard-stop stamps

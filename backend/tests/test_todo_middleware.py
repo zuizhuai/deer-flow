@@ -10,8 +10,13 @@ from langchain.agents import create_agent
 from langchain.agents.middleware.types import ModelRequest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.tools import tool as as_tool
 from pydantic import PrivateAttr
 
+from deerflow.agents.middlewares.loop_detection_middleware import (
+    _HARD_STOP_MSG,
+    LoopDetectionMiddleware,
+)
 from deerflow.agents.middlewares.model_length_finish_reason_middleware import (
     ModelLengthFinishReasonMiddleware,
 )
@@ -797,6 +802,59 @@ class TestTodoMiddlewareAgentGraphIntegration:
         assert final_ai.additional_kwargs["model_length_termination"]["suppressed_tool_call_count"] == 0
         assert all(final_ai.additional_kwargs[key] == value for key, value in additional_kwargs.items())
         assert "model_length_termination" not in capped_message.additional_kwargs
+        assert result["todos"] == todos
+        assert todo_mw._pending_completion_reminders == {}
+        assert not any(_todo_completion_reminders(messages) for messages in model.seen_messages)
+
+    @pytest.mark.parametrize("invoke_async", [False, True], ids=["sync", "async"])
+    def test_loop_hard_stop_does_not_reengage_todos(self, invoke_async):
+        """Reproduces bytedance/deer-flow#7953.
+
+        ``LoopDetectionMiddleware`` ends a loop-capped turn by stripping the
+        tool calls and appending the forced-stop notice. That turn is terminal,
+        so the todo completion guard must stand down instead of queueing a
+        reminder and jumping back to the model node — which re-armed the loop
+        the guard had just broken.
+        """
+
+        @as_tool
+        def bash(command: str) -> str:
+            """Run a fake shell command."""
+            return f"ran: {command}"
+
+        todo_mw = TodoMiddleware()
+        loop_mw = LoopDetectionMiddleware(
+            warn_threshold=1,
+            hard_limit=2,
+            tool_freq_warn=100,
+            tool_freq_hard_limit=200,
+        )
+        model = _CapturingFakeMessagesListChatModel(
+            responses=[
+                AIMessage(content="", tool_calls=[{"name": "bash", "id": "loop-1", "args": {"command": "ls"}}]),
+                AIMessage(content="", tool_calls=[{"name": "bash", "id": "loop-2", "args": {"command": "ls"}}]),
+                # Only requested if the todo guard re-engaged the stopped run.
+                AIMessage(content="should never be requested"),
+            ],
+        )
+        graph = create_agent(
+            model=model,
+            tools=[bash],
+            middleware=[todo_mw, loop_mw],
+            state_schema=ThreadState,
+        )
+        todos = [{"content": "Finish the report", "status": "in_progress"}]
+        state = {"messages": [("user", "look around the workspace")], "todos": todos}
+        context = {"thread_id": "loop-stop-thread", "run_id": "loop-stop-run"}
+
+        result = asyncio.run(graph.ainvoke(state, context=context)) if invoke_async else graph.invoke(state, context=context)
+
+        # Two model calls only: the hard stop ended the run.
+        assert len(model.seen_messages) == 2
+        final_ai = result["messages"][-1]
+        assert final_ai.tool_calls == []
+        assert _HARD_STOP_MSG in final_ai.content
+        assert final_ai.additional_kwargs["loop_detection_termination"]["detection_layer"] == "identical_call_set"
         assert result["todos"] == todos
         assert todo_mw._pending_completion_reminders == {}
         assert not any(_todo_completion_reminders(messages) for messages in model.seen_messages)
